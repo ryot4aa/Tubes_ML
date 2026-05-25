@@ -1,0 +1,9 @@
+env_tugas_besar/
+dataset/*.csv
+models/*.pkl
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
