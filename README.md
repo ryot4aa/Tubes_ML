@@ -22,4 +22,4 @@ nuhun
    streamlit run app/app.py
    ```
 
-Folder `models/` akan berisi model nyata untuk K-Means, BIRCH, Agglomerative, dan Spectral.
+Folder `models/` akan berisi model nyata untuk K-Means, BIRCH, Agglomerative, dan Spectral. Mean Imputation digunakan sebagai preprocessing sebelum clustering.
