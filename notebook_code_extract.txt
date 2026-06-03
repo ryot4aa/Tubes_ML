@@ -1,0 +1,460 @@
+CELL 5
+import os
+import sys
+import pickle
+import time
+from pathlib import Path
+import warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.cluster import KMeans, Birch, AgglomerativeClustering, SpectralClustering
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import silhouette_score, davies_bouldin_score
+from sklearn.neighbors import NearestCentroid
+
+warnings.filterwarnings('ignore')
+
+# Set style untuk visualisasi
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
+
+# Konfigurasi path
+REPO_ROOT = Path('.')
+DATASET_DIR = REPO_ROOT / 'dataset'
+MODELS_DIR = REPO_ROOT / 'models'
+
+print(f"Project Root: {REPO_ROOT.resolve()}")
+print(f"Dataset Directory: {DATASET_DIR.resolve()}")
+print(f"Models Directory: {MODELS_DIR.resolve()}")
+print("\n✓ Library import successful!")
+---
+CELL 10
+# PREPROCESSING DETAIL: Mean Imputation & Standardization
+
+# Step 1: Ekstrak fitur yang dipilih (menggunakan 3 fitur pertama dari Iris)
+numeric_cols = df_sample.select_dtypes(include=['number']).columns.tolist()
+feature_names = numeric_cols[:3]  # Ambil 3 fitur pertama
+df_features = df_sample[feature_names].copy()
+
+print("STEP 1: Feature Selection")
+print(f"Fitur yang dipilih: {feature_names}")
+print(f"Shape after selection: {df_features.shape}")
+print(f"\nMissing values per feature:")
+print(df_features.isnull().sum())
+
+# Step 2: Mean Imputation
+print("\n" + "="*60)
+print("STEP 2: Mean Imputation (Menangani Missing Values)")
+imputer = SimpleImputer(strategy='mean')
+df_imputed = pd.DataFrame(imputer.fit_transform(df_features), columns=feature_names)
+
+print(f"Mean values untuk imputation:")
+for idx, feat in enumerate(feature_names):
+    print(f"  {feat}: {imputer.statistics_[idx]:.4f}")
+
+print(f"\nMissing values setelah imputation:")
+print(df_imputed.isnull().sum())
+
+# Step 3: Standardization
+print("\n" + "="*60)
+print("STEP 3: Standardization (Normalisasi Fitur)")
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df_imputed)
+X_scaled_df = pd.DataFrame(X_scaled, columns=feature_names)
+
+print(f"Mean setelah scaling (harus ≈ 0):\n{X_scaled_df.mean()}")
+print(f"\nStandard deviation setelah scaling (harus ≈ 1):\n{X_scaled_df.std()}")
+---
+CELL 12
+# Inisialisasi 4 model clustering
+N_CLUSTERS = 3
+USE_SAMPLE_FOR_ALL_MODELS = True
+LIGHT_MODEL_SAMPLE = 15000  # sample untuk K-Means dan BIRCH
+HEAVY_MODEL_SAMPLE = 5000   # sample untuk Agglomerative dan Spectral
+
+model_defs = {
+    'K-Means': (KMeans(n_clusters=N_CLUSTERS, random_state=42, n_init=5), LIGHT_MODEL_SAMPLE),
+    'BIRCH': (Birch(n_clusters=N_CLUSTERS), LIGHT_MODEL_SAMPLE),
+    'Agglomerative': (AgglomerativeClustering(n_clusters=N_CLUSTERS, linkage='ward'), HEAVY_MODEL_SAMPLE),
+    'Spectral': (SpectralClustering(
+        n_clusters=N_CLUSTERS,
+        random_state=42,
+        assign_labels='discretize',
+        n_neighbors=10
+    ), HEAVY_MODEL_SAMPLE)
+}
+
+print(f"Jumlah klaster: {N_CLUSTERS}")
+print(f"Jumlah sampel data: {X_scaled.shape[0]}")
+print(f"Jumlah fitur: {X_scaled.shape[1]}\n")
+
+
+def _sample_for_model(X, n_samples):
+    if X.shape[0] <= n_samples:
+        return X
+    sample_idx = np.random.choice(X.shape[0], n_samples, replace=False)
+    return X[sample_idx]
+
+
+def _safe_clustering_metrics(X, labels):
+    unique_labels = np.unique(labels)
+    if len(unique_labels) < 2:
+        return np.nan, np.nan
+    silhouette = silhouette_score(X, labels)
+    davies_bouldin = davies_bouldin_score(X, labels)
+    return silhouette, davies_bouldin
+
+# Training semua model dengan sample yang disesuaikan
+results = {}
+for model_name, (model, sample_size) in model_defs.items():
+    if USE_SAMPLE_FOR_ALL_MODELS:
+        X_train = _sample_for_model(X_scaled, sample_size)
+        data_used = f'sample_{X_train.shape[0]}'
+    else:
+        X_train = X_scaled
+        data_used = 'full'
+
+    print(f"Training {model_name} pada {data_used}...")
+    start_time = time.time()
+    labels = model.fit_predict(X_train)
+    training_time = time.time() - start_time
+
+    silhouette, davies_bouldin = _safe_clustering_metrics(X_train, labels)
+    results[model_name] = {
+        'model': model,
+        'labels': labels,
+        'silhouette': silhouette,
+        'davies_bouldin': davies_bouldin,
+        'training_time': training_time,
+        'data_used': data_used
+    }
+
+    print(f"  ✓ Training time: {training_time:.4f}s")
+    print(f"  ✓ Silhouette Score: {silhouette:.4f}")
+    print(f"  ✓ Davies-Bouldin Index: {davies_bouldin:.4f}\n")
+
+print("="*60)
+print("Training selesai untuk semua model!")
+---
+CELL 13
+# Eksperimen lengkap pada semua 5 dataset fraud
+
+MAX_METRIC_SAMPLES = 10000
+USE_SAMPLE_FOR_ALL_MODELS = True
+LIGHT_MODEL_SAMPLE = 15000  # sample untuk K-Means dan BIRCH
+HEAVY_MODEL_SAMPLE = 5000   # sample untuk Agglomerative dan Spectral
+
+
+def preprocess_dataset(df: pd.DataFrame, dataset_name: str):
+    feature_columns = FEATURE_COLUMNS_BY_DATASET[dataset_name]
+    X = df[feature_columns].copy()
+    imputer = SimpleImputer(strategy='mean')
+    X_imputed = imputer.fit_transform(X)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_imputed)
+    return X_scaled, scaler, feature_columns
+
+
+def _safe_clustering_metrics(X, labels):
+    unique_labels = np.unique(labels)
+    if len(unique_labels) < 2:
+        return np.nan, np.nan
+
+    if X.shape[0] > MAX_METRIC_SAMPLES:
+        sample_idx = np.random.choice(X.shape[0], MAX_METRIC_SAMPLES, replace=False)
+        X_eval = X[sample_idx]
+        labels_eval = labels[sample_idx]
+    else:
+        X_eval = X
+        labels_eval = labels
+
+    silhouette = silhouette_score(X_eval, labels_eval)
+    davies_bouldin = davies_bouldin_score(X_eval, labels_eval)
+    return silhouette, davies_bouldin
+
+
+def _sample_for_model(X, n_samples):
+    if X.shape[0] <= n_samples:
+        return X
+    sample_idx = np.random.choice(X.shape[0], n_samples, replace=False)
+    return X[sample_idx]
+
+
+def train_models_on_data(X_scaled, dataset_name, light_sample_size=LIGHT_MODEL_SAMPLE, heavy_sample_size=HEAVY_MODEL_SAMPLE):
+    model_defs = {
+        'K-Means': (KMeans(n_clusters=N_CLUSTERS, random_state=42, n_init=5), light_sample_size),
+        'BIRCH': (Birch(n_clusters=N_CLUSTERS), light_sample_size),
+        'Agglomerative': (AgglomerativeClustering(n_clusters=N_CLUSTERS, linkage='ward'), heavy_sample_size),
+        'Spectral': (SpectralClustering(n_clusters=N_CLUSTERS, random_state=42, assign_labels='discretize', n_neighbors=10), heavy_sample_size)
+    }
+
+    summary = []
+    for name, (model, sample_size) in model_defs.items():
+        if USE_SAMPLE_FOR_ALL_MODELS:
+            X_train = _sample_for_model(X_scaled, sample_size)
+            data_used = f'sample_{X_train.shape[0]}'
+        else:
+            X_train = X_scaled
+            data_used = 'full'
+
+        print(f"Training {name} on {data_used} {dataset_name}...")
+        start_time = time.time()
+        labels = model.fit_predict(X_train)
+        training_time = time.time() - start_time
+
+        silhouette, davies_bouldin = _safe_clustering_metrics(X_train, labels)
+        summary.append({
+            'Dataset': dataset_name,
+            'Model': name,
+            'Data Used': data_used,
+            'Samples': X_train.shape[0],
+            'Silhouette': silhouette,
+            'Davies-Bouldin': davies_bouldin,
+            'Training Time': training_time
+        })
+
+        print(f"  ✓ Training time: {training_time:.4f}s")
+        print(f"  ✓ Silhouette Score: {silhouette if not np.isnan(silhouette) else 'n/a'}")
+        print(f"  ✓ Davies-Bouldin Index: {davies_bouldin if not np.isnan(davies_bouldin) else 'n/a'}")
+
+    return summary
+
+all_metrics = []
+for dataset_name in dataset_files:
+    if dataset_name not in FEATURE_COLUMNS_BY_DATASET:
+        print(f"Skipping {dataset_name}: belum ada mapping fitur")
+        continue
+    print(f"\n=== Analisis dataset: {dataset_name} ===")
+    df = pd.read_csv(DATASET_DIR / dataset_name)
+    X_scaled, scaler, feature_columns = preprocess_dataset(df, dataset_name)
+    dataset_summary = train_models_on_data(X_scaled, dataset_name)
+    all_metrics.extend(dataset_summary)
+
+all_metrics_df = pd.DataFrame(all_metrics)
+print("\nRingkasan metrik semua dataset:")
+print(all_metrics_df)
+
+---
+CELL 15
+# Buat tabel perbandingan metrik
+comparison_df = pd.DataFrame({
+    'Algoritma': list(results.keys()),
+    'Silhouette Score': [results[m]['silhouette'] for m in results.keys()],
+    'Davies-Bouldin': [results[m]['davies_bouldin'] for m in results.keys()],
+    'Training Time (s)': [results[m]['training_time'] for m in results.keys()]
+})
+
+print("PERBANDINGAN METRIK EVALUASI")
+print("="*80)
+print(comparison_df.to_string(index=False))
+print("="*80)
+
+# Identifikasi model terbaik
+best_silhouette = comparison_df.loc[comparison_df['Silhouette Score'].idxmax()]
+best_davies = comparison_df.loc[comparison_df['Davies-Bouldin'].idxmin()]
+
+print(f"\n✓ Model terbaik Silhouette Score: {best_silhouette['Algoritma']} ({best_silhouette['Silhouette Score']:.4f})")
+print(f"✓ Model terbaik Davies-Bouldin: {best_davies['Algoritma']} ({best_davies['Davies-Bouldin']:.4f})")
+
+# Visualisasi perbandingan metrik
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Silhouette Score
+axes[0].bar(comparison_df['Algoritma'], comparison_df['Silhouette Score'], color='steelblue', alpha=0.7)
+axes[0].set_ylabel('Silhouette Score', fontsize=12)
+axes[0].set_title('Perbandingan Silhouette Score\n(Semakin tinggi semakin baik)', fontsize=12, fontweight='bold')
+axes[0].set_ylim([comparison_df['Silhouette Score'].min() - 0.1, comparison_df['Silhouette Score'].max() + 0.1])
+axes[0].grid(axis='y', alpha=0.3)
+
+# Davies-Bouldin Index
+axes[1].bar(comparison_df['Algoritma'], comparison_df['Davies-Bouldin'], color='coral', alpha=0.7)
+axes[1].set_ylabel('Davies-Bouldin Index', fontsize=12)
+axes[1].set_title('Perbandingan Davies-Bouldin Index\n(Semakin rendah semakin baik)', fontsize=12, fontweight='bold')
+axes[1].set_ylim([comparison_df['Davies-Bouldin'].min() - 0.1, comparison_df['Davies-Bouldin'].max() + 0.2])
+axes[1].grid(axis='y', alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+print("\n✓ Visualisasi metrik selesai")
+---
+CELL 17
+# Analisis klaster dari model dengan Silhouette Score terbaik
+best_model_name = comparison_df.loc[comparison_df['Silhouette Score'].idxmax(), 'Algoritma']
+best_labels = results[best_model_name]['labels']
+
+print(f"Analisis menggunakan model: {best_model_name}")
+print("="*60)
+
+# Pastikan feature_names tersedia dan gunakan DataFrame yang benar untuk analisis
+if 'feature_names' not in globals() or feature_names is None:
+    if 'X_scaled_df' in globals() and isinstance(X_scaled_df, pd.DataFrame):
+        feature_names = X_scaled_df.columns.tolist()
+    else:
+        feature_names = [f'feature_{i}' for i in range(len(best_labels))]
+
+if 'X_scaled_df' in globals() and isinstance(X_scaled_df, pd.DataFrame):
+    analysis_df = X_scaled_df.copy()
+elif 'X_scaled' in globals():
+    analysis_df = pd.DataFrame(X_scaled, columns=feature_names)
+else:
+    raise RuntimeError('Tidak ada data fitur yang tersedia untuk analisis klaster.')
+
+# Sinkronisasi panjang label dengan data analisis jika perlu
+if len(best_labels) != len(analysis_df):
+    print(f"WARNING: Label model ({len(best_labels)}) tidak cocok dengan panjang data ({len(analysis_df)}). Menggunakan subset yang sesuai.")
+    analysis_df = analysis_df.iloc[:len(best_labels)].reset_index(drop=True)
+    best_labels = np.asarray(best_labels)[:len(analysis_df)]
+
+analysis_df['Cluster'] = best_labels
+
+# Ringkasan per cluster
+print("\nRINGKASAN PER KLASTER:")
+print("-"*60)
+for cluster_id in sorted(analysis_df['Cluster'].unique()):
+    cluster_data = analysis_df[analysis_df['Cluster'] == cluster_id]
+    print(f"\nKlaster {cluster_id}:")
+    print(f"  Jumlah sampel: {len(cluster_data)}")
+    print(f"  Persentase: {len(cluster_data)/len(analysis_df)*100:.1f}%")
+    print(f"  Mean (scaled):")
+    for feat in feature_names:
+        print(f"    {feat}: {cluster_data[feat].mean():.4f}")
+
+# Visualisasi distribusi klaster
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+cluster_counts = analysis_df['Cluster'].value_counts().sort_index()
+axes[0].bar(cluster_counts.index, cluster_counts.values, color=sns.color_palette('pastel', len(cluster_counts)), alpha=0.8)
+axes[0].set_xlabel('Klaster', fontsize=12)
+axes[0].set_ylabel('Jumlah Sampel', fontsize=12)
+axes[0].set_title(f'Distribusi Klaster - {best_model_name}', fontsize=12, fontweight='bold')
+axes[0].grid(axis='y', alpha=0.3)
+
+# Scatter plot 2D (menggunakan 2 fitur pertama jika tersedia)
+if len(feature_names) >= 2:
+    unique_clusters = sorted(analysis_df['Cluster'].unique())
+    palette = sns.color_palette('husl', len(unique_clusters))
+    for idx, cluster_id in enumerate(unique_clusters):
+        mask = analysis_df['Cluster'] == cluster_id
+        axes[1].scatter(
+            analysis_df.loc[mask, feature_names[0]],
+            analysis_df.loc[mask, feature_names[1]],
+            label=f'Klaster {cluster_id}',
+            alpha=0.6,
+            s=50,
+            color=palette[idx]
+        )
+    axes[1].set_xlabel(feature_names[0], fontsize=12)
+    axes[1].set_ylabel(feature_names[1], fontsize=12)
+    axes[1].set_title('Visualisasi Klaster 2D', fontsize=12, fontweight='bold')
+    axes[1].legend()
+    axes[1].grid(alpha=0.3)
+else:
+    axes[1].text(0.5, 0.5, 'Tidak cukup fitur untuk visualisasi 2D', ha='center', va='center', fontsize=12)
+    axes[1].set_axis_off()
+
+plt.tight_layout()
+plt.show()
+---
+CELL 19
+# Eksperimen: Variasi jumlah klaster (n_clusters)
+print("EKSPERIMEN PARAMETER TUNING: n_clusters")
+print("="*70)
+
+n_clusters_range = [2, 3, 4, 5, 6]
+model_names = ['K-Means', 'BIRCH', 'Agglomerative', 'Spectral']
+tuning_results = {model_name: [] for model_name in model_names}
+
+LIGHT_TUNING_SAMPLE = 15000
+HEAVY_TUNING_SAMPLE = 5000
+
+for n_clust in n_clusters_range:
+    print(f"\nTesting n_clusters = {n_clust}...")
+    
+    # K-Means
+    km = KMeans(n_clusters=n_clust, random_state=42, n_init=5)
+    X_train_km = _sample_for_model(X_scaled, LIGHT_TUNING_SAMPLE)
+    km_labels = km.fit_predict(X_train_km)
+    km_sil = silhouette_score(X_train_km, km_labels)
+    km_db = davies_bouldin_score(X_train_km, km_labels)
+    tuning_results['K-Means'].append({'n_clusters': n_clust, 'silhouette': km_sil, 'davies_bouldin': km_db})
+    
+    # BIRCH
+    birch = Birch(n_clusters=n_clust)
+    X_train_birch = _sample_for_model(X_scaled, LIGHT_TUNING_SAMPLE)
+    birch_labels = birch.fit_predict(X_train_birch)
+    birch_sil = silhouette_score(X_train_birch, birch_labels)
+    birch_db = davies_bouldin_score(X_train_birch, birch_labels)
+    tuning_results['BIRCH'].append({'n_clusters': n_clust, 'silhouette': birch_sil, 'davies_bouldin': birch_db})
+    
+    # Agglomerative
+    agg = AgglomerativeClustering(n_clusters=n_clust, linkage='ward')
+    X_train_agg = _sample_for_model(X_scaled, HEAVY_TUNING_SAMPLE)
+    agg_labels = agg.fit_predict(X_train_agg)
+    agg_sil = silhouette_score(X_train_agg, agg_labels)
+    agg_db = davies_bouldin_score(X_train_agg, agg_labels)
+    tuning_results['Agglomerative'].append({'n_clusters': n_clust, 'silhouette': agg_sil, 'davies_bouldin': agg_db})
+    
+    # Spectral
+    spec = SpectralClustering(n_clusters=n_clust, random_state=42, assign_labels='discretize', n_neighbors=10)
+    X_train_spec = _sample_for_model(X_scaled, HEAVY_TUNING_SAMPLE)
+    spec_labels = spec.fit_predict(X_train_spec)
+    spec_sil = silhouette_score(X_train_spec, spec_labels)
+    spec_db = davies_bouldin_score(X_train_spec, spec_labels)
+    tuning_results['Spectral'].append({'n_clusters': n_clust, 'silhouette': spec_sil, 'davies_bouldin': spec_db})
+    
+    print(f"  K-Means:       Silhouette={km_sil:.4f}, DB={km_db:.4f}")
+    print(f"  BIRCH:         Silhouette={birch_sil:.4f}, DB={birch_db:.4f}")
+    print(f"  Agglomerative: Silhouette={agg_sil:.4f}, DB={agg_db:.4f}")
+    print(f"  Spectral:      Silhouette={spec_sil:.4f}, DB={spec_db:.4f}")
+
+print("\n" + "="*70)
+print("✓ Eksperimen parameter tuning selesai")
+---
+CELL 20
+# Visualisasi hasil parameter tuning
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+# Extract data untuk plotting
+n_clust_vals = n_clusters_range
+for idx, model_name in enumerate(model_names):
+    row, col = divmod(idx, 2)
+    ax = axes[row, col]
+    
+    sil_scores = [r['silhouette'] for r in tuning_results[model_name]]
+    db_scores = [r['davies_bouldin'] for r in tuning_results[model_name]]
+    
+    ax2 = ax.twinx()
+    
+    # Silhouette Score (line)
+    line1 = ax.plot(n_clust_vals, sil_scores, 'b-o', linewidth=2, markersize=8, label='Silhouette Score')
+    ax.set_ylabel('Silhouette Score', color='b', fontsize=11)
+    ax.tick_params(axis='y', labelcolor='b')
+    ax.grid(alpha=0.3)
+    
+    # Davies-Bouldin (line)
+    line2 = ax2.plot(n_clust_vals, db_scores, 'r-s', linewidth=2, markersize=8, label='Davies-Bouldin')
+    ax2.set_ylabel('Davies-Bouldin Index', color='r', fontsize=11)
+    ax2.tick_params(axis='y', labelcolor='r')
+    
+    ax.set_xlabel('Number of Clusters', fontsize=11)
+    ax.set_title(f'{model_name}', fontsize=12, fontweight='bold')
+    ax.set_xticks(n_clust_vals)
+    
+    # Combine legends
+    lines = line1 + line2
+    labels = [l.get_label() for l in lines]
+    ax.legend(lines, labels, loc='upper left', fontsize=10)
+
+plt.suptitle('Parameter Tuning: Pengaruh Jumlah Klaster terhadap Metrik Evaluasi', 
+             fontsize=14, fontweight='bold', y=1.00)
+plt.tight_layout()
+plt.show()
+
+print("\n✓ Visualisasi parameter tuning selesai")
+---

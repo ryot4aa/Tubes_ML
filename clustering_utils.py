@@ -17,6 +17,7 @@ DATASET_DIR = REPO_ROOT / 'dataset'
 MODELS_DIR = REPO_ROOT / 'models'
 N_CLUSTERS = 3
 SAMPLE_SIZE = 3000
+PREPROCESSING_METHOD = 'Mean Imputation'
 
 FEATURE_COLUMNS_BY_DATASET = {
     'creditcard.csv': ['V1', 'V2', 'Amount'],
@@ -246,17 +247,26 @@ def load_or_train_models(dataset_name: str = 'creditcard.csv'):
     X_scaled, _ = preprocess_features(extract_features(df, dataset_name), scaler=scaler)
     _, _, metrics = fit_clustering_models(X_scaled)
     return models, scaler, assigners, metrics, X_scaled
-def summarize_clusters(X: np.ndarray, labels: np.ndarray):
-    df = pd.DataFrame(X, columns=['X1', 'X2', 'Amount'])
-    df['cluster'] = labels
-    summary = df.groupby('cluster').agg(
-        mean_X1=('X1', 'mean'),
-        mean_X2=('X2', 'mean'),
-        mean_Amount=('Amount', 'mean'),
-        count=('cluster', 'count')
-    ).reset_index()
+def summarize_clusters(X: np.ndarray, labels: np.ndarray, feature_names: Optional[list] = None):
+    if feature_names is None:
+        feature_names = [f'feature_{i+1}' for i in range(X.shape[1])]
+    elif len(feature_names) != X.shape[1]:
+        raise ValueError('Jumlah nama fitur tidak cocok dengan jumlah kolom X.')
 
-    ordered = summary.sort_values('mean_Amount').reset_index(drop=True)
+    df = pd.DataFrame(X, columns=feature_names)
+    df['cluster'] = labels
+
+    agg_dict = {name: 'mean' for name in feature_names}
+    agg_dict['cluster'] = 'count'
+    summary = df.groupby('cluster').agg(agg_dict).rename(columns={
+        name: f'mean_{name}' for name in feature_names
+    }).rename(columns={'cluster': 'count'}).reset_index()
+
+    ordering_feature = f'mean_{feature_names[-1]}'
+    if ordering_feature not in summary.columns:
+        ordering_feature = summary.columns[1]
+
+    ordered = summary.sort_values(ordering_feature).reset_index(drop=True)
     descriptions = {}
     for idx, row in ordered.iterrows():
         if idx == 0:

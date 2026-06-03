@@ -1,0 +1,64 @@
+STRUKTUR CODE DAN PENJELASAN CODE
+
+1. Folder dataset/ (Pondasi Utama — Data Mentah)
+
+Isi: 5 file CSV transaksi keuangan yang akan dipakai untuk eksperimen dan pelatihan model.
+
+Penjelasan: "Folder dataset/ menyimpan semua data mentah yang digunakan oleh proyek. Setiap file akan dibersihkan dan diproses oleh pipeline (Mean Imputation, seleksi fitur, dan standardisasi) sebelum model dilatih atau dipakai di aplikasi."
+
+
+2. File clustering_utils.py (Logika Utama dan Shared Utilities)
+
+Isi: fungsi untuk membaca data, memilih fitur, preprocessing, melatih model, menyimpan/memuat model, dan memprediksi cluster.
+
+Penjelasan: "File ini adalah inti dari workflow sekaligus sumber kebenaran bagi semua komponen. Notebook, script pelatihan, dan aplikasi web semuanya menggunakan fungsi yang sama dari clustering_utils.py sehingga hasilnya konsisten."
+
+
+3. Folder models/ (Hasil Pelatihan Model)
+
+Isi: file .pkl untuk model clustering dan scaler.
+
+Penjelasan: "Folder models/ menyimpan artefak model yang sudah dilatih agar aplikasi web tidak perlu melatih ulang setiap kali dijalankan. File-file ini digunakan langsung oleh app.py untuk memprediksi klaster transaksi baru."
+
+
+4. File train_clustering_models.py (Script Pelatihan Batch)
+
+Isi: script yang melatih semua dataset dan menyimpan model ke folder models/.
+
+Penjelasan: "Jalankan script ini jika model belum tersedia. Script ini memuat tiap dataset, melatih 4 algoritma clustering, lalu menyimpan model dan scaler."
+
+
+5. Folder app/ dan app/app.py (Dashboard Streamlit)
+
+Isi: antarmuka web interaktif yang menampilkan hasil deteksi dan evaluasi.
+
+Penjelasan: "File app.py membuat dashboard yang menampilkan tiga halaman: Deteksi Transaksi, Analisis Komparatif Evaluasi, dan Model Terbaik Otomatis. Aplikasi ini memuat model dari folder models/ dan memakai pipeline preprocessing yang sama dengan training."
+
+
+APLIKASI
+
+1. Sidebar
+
+Isi: pilihan dataset dan menu halaman.
+
+Penjelasan: "Sidebar memungkinkan user memilih dataset yang ingin diuji dan berpindah antar halaman aplikasi. Menu sekarang ada tiga: Sistem Deteksi Terpadu, Analisis Komparatif Evaluasi, dan Model Terbaik Otomatis."
+
+
+2. Halaman Sistem Deteksi Terpadu
+
+Penjelasan: "Halaman ini digunakan untuk mendeteksi transaksi baru. User memasukkan nilai fitur transaksi (atau membiarkan kosong untuk mean imputation), lalu sistem akan memproses data tersebut dan mengklasifikasikannya menggunakan model terbaik yang tersedia."
+
+
+3. Halaman Analisis Komparatif Evaluasi
+
+Penjelasan: "Halaman ini menampilkan perbandingan performa semua model clustering. Tabel evaluasi berisi metrik seperti Silhouette Score dan Davies-Bouldin untuk keempat model. Dari sini user bisa melihat model mana yang paling baik dan kemudian menekan tombol 'Gunakan model terbaik di Deteksi' untuk langsung memakai model terbaik di halaman Deteksi."
+
+
+4. Halaman Model Terbaik Otomatis
+
+Penjelasan: "Halaman ini fokus pada satu model terbaik berdasarkan Silhouette Score. Di sini user tidak perlu membandingkan semua model, karena aplikasi sudah memilih model terbaik untuk dataset terpilih. Halaman ini juga menampilkan hasil deteksi default menggunakan nilai mean fitur untuk menunjukkan output model terbaik secara langsung."
+
+
+5. Alur Singkat Penggunaan
+
+Penjelasan: "1) Jalankan `python train_clustering_models.py` untuk melatih model dan membuat file .pkl. 2) Jalankan `streamlit run app/app.py` untuk membuka dashboard. 3) Pilih dataset di sidebar. 4) Pilih halaman yang diinginkan: Deteksi untuk testing transaksi, Analisis untuk membandingkan metrik, atau Model Terbaik Otomatis untuk melihat rekomendasi terbaik."

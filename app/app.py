@@ -63,13 +63,14 @@ def format_metrics_table(metrics):
 
 def render_detection_page(models, scaler, assigners, metrics, X_train, dataset_name):
     st.title('Sistem Pemetaan & Deteksi Anomali Transaksi')
-    st.write(f'Aplikasi ini menggunakan preprocessing Mean Imputation + 4 algoritma clustering untuk mendeteksi pola transaksi pada dataset {dataset_name}.')
+    st.write(f'Aplikasi ini menggunakan preprocessing Mean Imputation dan 4 algoritma clustering untuk mendeteksi pola transaksi pada dataset {dataset_name}.')
 
     st.markdown('''
     **Clustering apa?**
-    - Model membagi transaksi menjadi 3 klaster berdasarkan fitur V1, V2, dan Amount.
-    - Tujuan: memisahkan pola normal, mencurigakan, dan risiko tinggi.
-    - Model yang tersedia: K-Means, BIRCH, Agglomerative, Spectral.
+    - Ini adalah metode unsupervised clustering: sistem mengelompokkan transaksi tanpa label fraud langsung.
+    - Model membagi transaksi menjadi 3 klaster berdasarkan kemiripan fitur.
+    - Tujuan: memetakan pola normal, mencurigakan, dan risiko tinggi.
+    - Metode yang digunakan: Mean Imputation sebagai preprocessing, lalu K-Means, BIRCH, Agglomerative, dan Spectral untuk clustering.
     ''')
 
     raw_df = load_dataset(dataset_name)
@@ -93,7 +94,35 @@ def render_detection_page(models, scaler, assigners, metrics, X_train, dataset_n
     with col3:
         amount_input = st.text_input(f'Karakteristik {f3_name} (kosongkan untuk mean imputation):', value='')
 
-    model_choice = st.selectbox('Pilih Model Algoritma Clustering:', list(MODEL_NAME_MAPPING.keys()))
+    # Pilih model terbaik: jika ada preferensi dari session (dari halaman Analisis), gunakan itu
+    preferred = st.session_state.get('preferred_model_internal')
+    if preferred and preferred in metrics:
+        best_internal = preferred
+    else:
+        best_internal = max(metrics, key=lambda n: metrics[n]['silhouette'])
+    best_display = next(k for k, v in MODEL_NAME_MAPPING.items() if v == best_internal)
+    st.write(f"Model terbaik: **{best_display}** (Silhouette={metrics[best_internal]['silhouette']})")
+    model_choice = best_display
+
+    # Tampilkan hasil deteksi default menggunakan nilai mean fitur (tanpa input)
+    try:
+        default_x1 = float(feature_means[f1_name])
+        default_x2 = float(feature_means[f2_name])
+        default_amount = float(feature_means[f3_name])
+        default_sample = get_feature_vector(default_x1, default_x2, default_amount, scaler)
+        selected_model = MODEL_NAME_MAPPING[model_choice]
+        default_cluster = assign_cluster_for_sample(selected_model, models, assigners, default_sample)
+        labels_default = get_labels_for_model(selected_model, models, assigners, X_train)
+        summary_default, descriptions_default = summarize_clusters(X_train, labels_default, feature_cols)
+        default_description = format_cluster_description(default_cluster, descriptions_default, selected_model)
+
+        st.markdown('**Hasil deteksi default (menggunakan mean fitur):**')
+        st.success(f'Transaksi default masuk ke dalam **Klaster {default_cluster}** menggunakan model **{selected_model}**.')
+        st.write('**Metrik model (default):**')
+        st.write(metrics[selected_model])
+        st.write(default_description)
+    except Exception as e:
+        st.warning(f'Gagal menampilkan hasil default: {e}')
 
     if st.button('Jalankan Deteksi Transaksi'):
         try:
@@ -116,8 +145,12 @@ def render_detection_page(models, scaler, assigners, metrics, X_train, dataset_n
         cluster_id = assign_cluster_for_sample(selected_model, models, assigners, sample)
 
         labels = get_labels_for_model(selected_model, models, assigners, X_train)
-        summary, descriptions = summarize_clusters(X_train, labels)
+        summary, descriptions = summarize_clusters(X_train, labels, feature_cols)
         description = format_cluster_description(cluster_id, descriptions, selected_model)
+
+        train_df = pd.DataFrame(X_train, columns=feature_cols)
+        train_df['cluster'] = labels
+        preview_df = train_df.head(12)
 
         st.write('---')
         st.success(f'Transaksi ini masuk ke dalam **Klaster {cluster_id}** menggunakan model **{selected_model}**.')
@@ -128,15 +161,13 @@ def render_detection_page(models, scaler, assigners, metrics, X_train, dataset_n
         st.write(MODEL_DESCRIPTIONS[selected_model])
 
         if st.checkbox('Tampilkan ringkasan cluster dataset untuk model ini'):
+            st.subheader('Ringkasan dan distribusi klaster')
+            st.write('Data pelatihan berikut telah dikelompokkan berdasarkan model yang dipilih:')
+            st.dataframe(preview_df)
             st.write('Ringkasan cluster dari data pelatihan:')
-            rename_map = {
-                'cluster': 'Klaster',
-                'mean_X1': f'Rata-rata {f1_name}',
-                'mean_X2': f'Rata-rata {f2_name}',
-                'mean_Amount': f'Rata-rata {f3_name}',
-                'count': 'Jumlah Transaksi',
-                'description': 'Deskripsi Klaster'
-            }
+            rename_map = {'cluster': 'Klaster', 'count': 'Jumlah Transaksi', 'description': 'Deskripsi Klaster'}
+            for feature_name in feature_cols:
+                rename_map[f'mean_{feature_name}'] = f'Rata-rata {feature_name}'
             st.dataframe(summary.rename(columns=rename_map))
             st.bar_chart(summary.set_index('cluster')['count'])
 
@@ -144,9 +175,20 @@ def render_detection_page(models, scaler, assigners, metrics, X_train, dataset_n
 def render_evaluation_page(metrics, dataset_name):
     st.title('📊 Analisis Komparatif Evaluasi Performa Model')
     st.write(f'Halaman ini menampilkan metrik nyata dari keempat model clustering yang dilatih pada dataset {dataset_name}.')
+    st.write('Mean Imputation digunakan sebagai preprocessing sebelum semua algoritma clustering dijalankan.')
 
     df_metrics = format_metrics_table(metrics)
     st.table(df_metrics)
+
+    # Tombol cepat: gunakan model terbaik di halaman Deteksi
+    try:
+        best_internal_for_button = max(metrics, key=lambda name: metrics[name]['silhouette'])
+        if st.button('Gunakan model terbaik di Deteksi'):
+            st.session_state['menu_override'] = 'Sistem Deteksi Terpadu'
+            st.session_state['preferred_model_internal'] = best_internal_for_button
+            st.experimental_rerun()
+    except Exception:
+        pass
 
     st.markdown(
         '- **Silhouette Score**: semakin tinggi semakin baik pemisahan antar klaster.\n'
@@ -156,6 +198,43 @@ def render_evaluation_page(metrics, dataset_name):
     st.info('Model terbaik berdasarkan silhouette score adalah **{}**.'.format(
         df_metrics.loc[df_metrics['Silhouette Score'].idxmax(), 'Algoritma']
     ))
+
+
+def render_best_model_page(models, scaler, assigners, metrics, X_train, dataset_name):
+    """Render a focused page showing the single best model (by silhouette) for the selected dataset."""
+    st.title('🔎 Model Terbaik')
+    best_internal = max(metrics, key=lambda n: metrics[n]['silhouette'])
+    # find display name
+    best_display = next(k for k, v in MODEL_NAME_MAPPING.items() if v == best_internal)
+
+    st.write(f'Dataset: **{dataset_name}**')
+    st.write(f'Model terbaik berdasarkan silhouette: **{best_display}** — Silhouette={metrics[best_internal]["silhouette"]}')
+    st.write('**Penjelasan algoritma:**')
+    st.write(MODEL_DESCRIPTIONS[best_internal])
+
+    feature_df = extract_features(load_dataset(dataset_name), dataset_name)
+    feature_cols = list(feature_df.columns)
+
+    # Default prediction using mean features
+    feature_means = feature_df.mean()
+    f1_name, f2_name, f3_name = feature_cols[0], feature_cols[1], feature_cols[2]
+    try:
+        default_sample = get_feature_vector(float(feature_means[f1_name]), float(feature_means[f2_name]), float(feature_means[f3_name]), scaler)
+        cluster_id = assign_cluster_for_sample(best_internal, models, assigners, default_sample)
+        labels = get_labels_for_model(best_internal, models, assigners, X_train)
+        summary, descriptions = summarize_clusters(X_train, labels, feature_cols)
+
+        st.markdown('**Hasil deteksi default (menggunakan mean fitur):**')
+        st.success(f'Transaksi default masuk ke dalam **Klaster {cluster_id}** menggunakan model **{best_display}**.')
+        st.write('**Metrik model:**')
+        st.write(metrics[best_internal])
+        if st.checkbox('Tampilkan ringkasan cluster untuk model terbaik'):
+            rename_map = {'cluster': 'Klaster', 'count': 'Jumlah Transaksi', 'description': 'Deskripsi Klaster'}
+            for feature_name in feature_cols:
+                rename_map[f'mean_{feature_name}'] = f'Rata-rata {feature_name}'
+            st.dataframe(summary.rename(columns=rename_map))
+    except Exception as e:
+        st.warning(f'Gagal menampilkan hasil default untuk model terbaik: {e}')
 
 
 def main():
@@ -193,7 +272,10 @@ def main():
                 st.session_state.show_training_modal = False
     datasets = list_datasets()
     selected_dataset = st.sidebar.selectbox('Pilih Dataset:', datasets, index=0 if datasets else None)
-    menu = st.sidebar.selectbox('Pilih Halaman:', ['Sistem Deteksi Terpadu', 'Analisis Komparatif Evaluasi'])
+    menu = st.sidebar.selectbox('Pilih Halaman:', ['Sistem Deteksi Terpadu', 'Analisis Komparatif Evaluasi', 'Model Terbaik'])
+    # Jika ada override dari tombol (halaman Analisis), gunakan override untuk navigasi
+    if 'menu_override' in st.session_state:
+        menu = st.session_state.pop('menu_override')
 
     with st.spinner('Memuat model clustering...'):
         if selected_dataset:
@@ -227,8 +309,10 @@ def main():
 
     if menu == 'Sistem Deteksi Terpadu':
         render_detection_page(models, scaler, assigners, metrics, X_train, selected_dataset)
-    else:
+    elif menu == 'Analisis Komparatif Evaluasi':
         render_evaluation_page(metrics, selected_dataset)
+    else:
+        render_best_model_page(models, scaler, assigners, metrics, X_train, selected_dataset)
 
 
 if __name__ == '__main__':
